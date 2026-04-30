@@ -1,0 +1,7 @@
+/shodan-audit
+/attack-sim
+/corpus-dump
+/visorforge
+/visorfail
+*.json
+*.csv
