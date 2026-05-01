@@ -121,6 +121,20 @@ SHODAN_API_KEY=$(cat ~/.config/nuclide/shodan.key) ./jaxen import results.csv
 
 ---
 
+## Use with Claude Code
+
+Claude Code can run VisorSD scans, parse the severity-ranked JSON output, and chain results into VisorAgent or aimap workflows for deeper validation.
+
+```
+Run `./visorsd -org "Target Org" -format json -out visorsd.json` with SHODAN_API_KEY set, then analyze visorsd.json: list every CRITICAL and HIGH finding with IP, port, service, and a one-line description of the exposure. Flag any that are direct inputs for VisorAgent (exposed Ollama or Open WebUI endpoints).
+```
+
+```
+I have visorsd.json from a scan. Extract all CRITICAL findings, format them as a findings table (IP | Port | Service | Severity | Evidence), and suggest which three findings to validate first with aimap active probes and why.
+```
+
+---
+
 ## Related Tools
 
 VisorSD is part of the Nuclide recon ecosystem:
