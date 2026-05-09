@@ -32,6 +32,16 @@ type ResultRecord struct {
 	Rationale   string `json:"rationale"`
 }
 
+type HostRecord struct {
+	Host      string `json:"host"`
+	IP        string `json:"ip"`
+	Port      int    `json:"port"`
+	Component string `json:"component"`
+	Severity  string `json:"severity"`
+	Org       string `json:"org"`
+	Product   string `json:"product"`
+}
+
 func severityRank(s shodan.Severity) int {
 	switch s {
 	case shodan.SeverityCritical:
@@ -70,7 +80,19 @@ func main() {
 	out := flag.String("out", "", "Write results to file (default stdout)")
 	failOn := flag.String("fail-on", "", "Exit non-zero if any hit at or above severity: CRITICAL|HIGH|MEDIUM|LOW")
 	dryRun := flag.Bool("dry-run", false, "Print scoped queries without calling Shodan")
+	hosts := flag.Bool("hosts", false, "Output individual host records instead of aggregate counts (for VisorAgent)")
+	stack := flag.String("stack", "", "Filter to a named stack (beginner|inference|vector-db|data|observability|rag) — omit value to list stacks")
 	flag.Parse()
+
+	if flag.NArg() > 0 && flag.Arg(0) == "stacks" || (*stack == "" && len(os.Args) == 2 && os.Args[1] == "-stack") {
+		fmt.Printf("\n%s%sAvailable stacks:%s\n\n", bold, cyan, reset)
+		for _, s := range shodan.StackNames() {
+			qs := shodan.QueriesForStack(s)
+			fmt.Printf("  %-16s %s%d queries%s\n", s, gray, len(qs), reset)
+		}
+		fmt.Printf("\nUsage: visorsd -stack <name> [-dry-run]\n\n")
+		return
+	}
 
 	if *key == "" && !*dryRun {
 		fmt.Fprintln(os.Stderr, "error: -key or SHODAN_API_KEY required")
@@ -84,7 +106,17 @@ func main() {
 		Net:    *net,
 	}
 
-	queries := shodan.AllQueries()
+	var queries []shodan.Query
+	if *stack != "" {
+		queries = shodan.QueriesForStack(*stack)
+		if len(queries) == 0 {
+			fmt.Fprintf(os.Stderr, "error: unknown stack %q — run `visorsd stacks` to list\n", *stack)
+			os.Exit(1)
+		}
+		fmt.Printf("\n%s%sStack: %s%s  (%d queries)\n", bold, cyan, *stack, reset, len(queries))
+	} else {
+		queries = shodan.AllQueries()
+	}
 	client := shodan.NewClient(*key)
 
 	var failRank int
@@ -97,6 +129,7 @@ func main() {
 	}
 
 	var records []ResultRecord
+	var hostRecords []HostRecord
 	maxHitRank := 0
 
 	for _, q := range queries {
@@ -124,6 +157,24 @@ func main() {
 		}
 		records = append(records, rec)
 
+		if *hosts && hits > 0 {
+			for _, m := range resp.Matches {
+				host := m.IPStr
+				if len(m.Hostnames) > 0 {
+					host = m.Hostnames[0]
+				}
+				hostRecords = append(hostRecords, HostRecord{
+					Host:      host,
+					IP:        m.IPStr,
+					Port:      m.Port,
+					Component: q.ID,
+					Severity:  string(q.Severity),
+					Org:       m.Org,
+					Product:   m.Product,
+				})
+			}
+		}
+
 		if hits > 0 && severityRank(q.Severity) > maxHitRank {
 			maxHitRank = severityRank(q.Severity)
 		}
@@ -148,7 +199,11 @@ func main() {
 	case "json":
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		enc.Encode(records)
+		if *hosts {
+			enc.Encode(hostRecords)
+		} else {
+			enc.Encode(records)
+		}
 
 	case "csv":
 		cw := csv.NewWriter(w)
