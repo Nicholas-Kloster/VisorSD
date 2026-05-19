@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -38,7 +39,32 @@ type SearchMatch struct {
 	Product   string         `json:"product"`
 }
 
+// Search executes a Shodan host-search query with automatic exponential
+// backoff on HTTP 429 rate-limit responses.  Delays: 1s, 2s, 4s, 8s, 16s
+// (up to 5 attempts total).  Non-429 errors are returned immediately.
 func (c *Client) Search(ctx context.Context, query string, limit int) (*SearchResponse, error) {
+	const maxAttempts = 5
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		sr, err := c.doSearch(ctx, query, limit)
+		if err == nil {
+			return sr, nil
+		}
+		if !strings.Contains(err.Error(), "429") {
+			return nil, err
+		}
+		// Rate-limited — back off exponentially then retry.
+		delay := time.Duration(1<<uint(attempt)) * time.Second // 1, 2, 4, 8, 16 s
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return nil, fmt.Errorf("shodan: rate-limited after %d retries", maxAttempts)
+}
+
+// doSearch performs a single Shodan API request without retry logic.
+func (c *Client) doSearch(ctx context.Context, query string, limit int) (*SearchResponse, error) {
 	params := url.Values{}
 	params.Set("key", c.apiKey)
 	params.Set("query", query)
@@ -65,6 +91,9 @@ func (c *Client) Search(ctx context.Context, query string, limit int) (*SearchRe
 	}
 	if resp.StatusCode == 402 {
 		return nil, fmt.Errorf("query requires paid Shodan plan")
+	}
+	if resp.StatusCode == 429 {
+		return nil, fmt.Errorf("shodan: 429 rate-limited")
 	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("shodan returned HTTP %s", strconv.Itoa(resp.StatusCode))
